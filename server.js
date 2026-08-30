@@ -6,13 +6,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "5mb" })); // Keeps memory footprint low
 
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    message: "Virundhu AI verification backend is running."
-  });
+  res.json({ ok: true, message: "Virundhu AI backend running." });
 });
 
 app.post("/verify", async (req, res) => {
@@ -20,82 +17,48 @@ app.post("/verify", async (req, res) => {
     const { imageBase64, mimeType } = req.body || {};
 
     if (!imageBase64 || !mimeType) {
-      return res.status(400).json({
-        ok: false,
-        status: "flagged",
-        error: "imageBase64 and mimeType are required."
-      });
-    }
-
-    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
-      return res.status(400).json({
-        ok: false,
-        status: "flagged",
-        error: "Only JPG, PNG and WebP images are supported."
-      });
+      return res.status(400).json({ ok: false, status: "flagged", error: "Image required." });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({
-        ok: false,
-        status: "flagged",
-        error: "GEMINI_API_KEY is not configured on the server."
-      });
+      return res.status(500).json({ ok: false, status: "flagged", error: "Missing API Key." });
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+    
+    // Fast flash model with rigid output constraints
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 60, // Limits execution time to under ~1 second
+        temperature: 0.1
+      }
+    });
 
     const prompt = `
-You are a strict binary classifier. Look at the image and check ONLY:
-1. Does it contain a human photo, face, person, or a valid ID document/proof?
-2. Does it contain anything else (like flowers, animals, vehicles, trees, fruits, electronics, home appliances, buildings, scenery, objects)?
+Is this image a human photo, human face, or an ID document?
+- YES if human face/photo or ID proof.
+- NO if flowers, animals, cars, trees, fruits, electronics, or objects.
 
-IMPORTANT INSTRUCTIONS:
-- IGNORE image quality, blur, brightness, or cropping completely. Do not reject photos just because they are blurry, dark, or cropped.
-- If it contains a human photo, face, or an ID document, set status to "verified".
-- If it contains flowers, animals, vehicles, trees, fruits, or any other non-human objects, set status to "flagged".
-
-Return ONLY valid JSON in this exact structure:
-{
-  "status": "verified" or "flagged",
-  "documentType": "Human Photo / ID Document / Other Object",
-  "note": "Checked"
-}
+Output JSON only:
+{"status": "verified" or "flagged", "documentType": "Human / ID / Object"}
 `;
 
     const response = await model.generateContent([
       prompt,
-      {
-        inlineData: {
-          mimeType,
-          data: imageBase64
-        }
-      }
+      { inlineData: { mimeType, data: imageBase64 } }
     ]);
 
-    const responseText = response.response.text() || "";
-    let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-
-    let result;
-    try {
-      result = JSON.parse(text);
-    } catch {
-      return res.status(502).json({
-        ok: false,
-        status: "flagged",
-        error: "Could not evaluate image."
-      });
-    }
-
-    const status = result.status === "verified" ? "verified" : "flagged";
+    const result = JSON.parse(response.response.text().trim());
+    const isVerified = result.status === "verified";
 
     return res.json({
       ok: true,
-      status,
+      status: isVerified ? "verified" : "flagged",
       documentType: String(result.documentType || "Unknown"),
-      note: String(result.note || "Checked.")
+      note: isVerified ? "Accepted" : "Rejected non-human/non-ID photo"
     });
 
   } catch (error) {
@@ -103,11 +66,9 @@ Return ONLY valid JSON in this exact structure:
     return res.status(500).json({
       ok: false,
       status: "flagged",
-      error: "Verification failed. Please try again."
+      error: "Verification error. Please retry."
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Virundhu backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server on port ${PORT}`));
