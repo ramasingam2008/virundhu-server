@@ -43,24 +43,30 @@ app.post("/verify", async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // Lenient prompt to quickly pass almost any ID image
+    // Strict prompt to filter out non-human, non-ID images
     const prompt = `
-Perform an extremely fast and relaxed check on this image.
+Analyze the uploaded image with STRICT compliance to these instructions:
+
+PERMITTED CATEGORIES (Set status to "verified"):
+1. Personal ID Documents: Aadhaar, PAN card, Passport, Driving License, Voter ID, or any government photo ID.
+2. Human Photos: A person's face, portrait, selfie, or full-body photo of a human being.
+
+FORBIDDEN CATEGORIES (Set status to "flagged"):
+- Objects, flowers, plants, trees, animals, pets, vehicles, cars, bikes, electronics, home appliances, buildings, bridges, scenery, blank screens, or non-human items.
 
 RULES:
-1. If the image resembles an ID card, document, license, or photo ID in ANY way, classify it as "verified".
-2. Be VERY forgiving: Accept photos even if they are blurry, tilted, slightly dark, or cropped.
-3. Only mark as "flagged" if the image is completely unrelated (e.g. a picture of a cat or blank screen).
+- If the image contains ANY forbidden object (e.g., flower, animal, car, appliance), set "status" to "flagged".
+- ONLY set "status" to "verified" if the image clearly shows an ID proof or a human photo.
+- Do NOT extract or return sensitive personal data like ID numbers or full addresses.
 
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON in this exact structure:
 {
   "status": "verified" or "flagged",
-  "documentType": "ID document",
-  "note": "Document verified."
+  "documentType": "ID Proof / Human Photo / Rejected Object",
+  "note": "Short reason explaining acceptance or rejection"
 }
 `;
 
-    // Multiple models fallback list
     const modelsToTry = [
       "gemini-1.5-flash",
       "gemini-1.5-pro",
@@ -74,7 +80,10 @@ Return ONLY valid JSON in this exact format:
       try {
         const model = genAI.getGenerativeModel({ 
           model: modelName,
-          generationConfig: { maxOutputTokens: 100 } // Fast response setting
+          generationConfig: { 
+            maxOutputTokens: 150,
+            temperature: 0.1 // Low temperature ensures strict adherence to rules
+          } 
         });
 
         const response = await model.generateContent([
@@ -88,19 +97,16 @@ Return ONLY valid JSON in this exact format:
         ]);
 
         responseText = response.response.text() || "";
-        if (responseText) break; // Break loop if response is received
+        if (responseText) break;
       } catch (err) {
         console.warn(`Model ${modelName} failed, trying next fallback...`, err.message);
       }
     }
 
-    // Auto-pass safety net if all models are busy
     if (!responseText) {
-      return res.json({
-        ok: true,
-        status: "verified",
-        documentType: "ID document",
-        note: "Automatically approved."
+      return res.status(503).json({
+        ok: false,
+        error: "Verification service temporary busy. Please try again."
       });
     }
 
@@ -110,25 +116,25 @@ Return ONLY valid JSON in this exact format:
     try {
       result = JSON.parse(text);
     } catch {
-      result = { status: "verified" };
+      return res.status(502).json({
+        ok: false,
+        error: "AI produced an unreadable evaluation. Please re-upload."
+      });
     }
 
-    const status = result.status === "flagged" ? "flagged" : "verified";
+    const status = result.status === "verified" ? "verified" : "flagged";
 
     return res.json({
       ok: true,
       status,
-      documentType: String(result.documentType || "ID document"),
-      note: String(result.note || "Document checked.")
+      documentType: String(result.documentType || "Unknown"),
+      note: String(result.note || "Image validation complete.")
     });
   } catch (error) {
     console.error("Verification error:", error);
-    // Instant fallback pass so users are never blocked by API issues
-    return res.json({
-      ok: true,
-      status: "verified",
-      documentType: "ID document",
-      note: "Accepted automatically."
+    return res.status(500).json({
+      ok: false,
+      error: "Verification failed. Please upload a clear photo of an ID or human."
     });
   }
 });
