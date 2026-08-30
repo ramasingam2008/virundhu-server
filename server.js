@@ -42,13 +42,14 @@ app.post("/verify", async (req, res) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `
-Analyze the uploaded image with STRICT compliance to these instructions:
+Analyze the uploaded image with STRICT compliance:
 
 PERMITTED CATEGORIES (Set status to "verified"):
 1. Personal ID Documents: Aadhaar, PAN card, Passport, Driving License, Voter ID, or any government photo ID.
-2. Human Photos: A person's face, portrait, selfie, or full-body photo of a human being.
+2. Human Photos: A clear person's face, portrait, selfie, or profile photo of a human being.
 
 FORBIDDEN CATEGORIES (Set status to "flagged"):
 - Objects, flowers, plants, trees, animals, pets, vehicles, cars, bikes, electronics, home appliances, buildings, bridges, scenery, blank screens, or non-human items.
@@ -66,50 +67,17 @@ Return ONLY valid JSON in this exact structure:
 }
 `;
 
-    // Valid production models array
-    const modelsToTry = [
-      "gemini-1.5-flash-latest",
-      "gemini-1.5-flash-8b",
-      "gemini-1.5-pro-latest",
-      "gemini-2.5-flash"
-    ];
-
-    let responseText = "";
-
-    for (const modelName of modelsToTry) {
-      try {
-        const model = genAI.getGenerativeModel({ 
-          model: modelName,
-          generationConfig: { 
-            maxOutputTokens: 150,
-            temperature: 0.1
-          } 
-        });
-
-        const response = await model.generateContent([
-          prompt,
-          {
-            inlineData: {
-              mimeType,
-              data: imageBase64
-            }
-          }
-        ]);
-
-        responseText = response.response.text() || "";
-        if (responseText) break;
-      } catch (err) {
-        console.warn(`Model ${modelName} failed:`, err.message);
+    const response = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType,
+          data: imageBase64
+        }
       }
-    }
+    ]);
 
-    if (!responseText) {
-      return res.status(503).json({
-        ok: false,
-        error: "AI verification busy. Please try again in a few seconds."
-      });
-    }
-
+    const responseText = response.response.text() || "";
     let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
     let result;
@@ -118,7 +86,7 @@ Return ONLY valid JSON in this exact structure:
     } catch {
       return res.status(502).json({
         ok: false,
-        error: "Unreadable AI output. Please re-upload image."
+        error: "AI produced an unreadable evaluation. Please re-upload."
       });
     }
 
@@ -128,13 +96,13 @@ Return ONLY valid JSON in this exact structure:
       ok: true,
       status,
       documentType: String(result.documentType || "Unknown"),
-      note: String(result.note || "Validation complete.")
+      note: String(result.note || "Image validation complete.")
     });
   } catch (error) {
     console.error("Verification error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Verification request failed. Please try again."
+      error: "Verification failed. Please upload a clear photo of an ID or human."
     });
   }
 });
