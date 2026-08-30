@@ -42,7 +42,7 @@ app.post("/verify", async (req, res) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `
 You are helping a catering-staff marketplace perform a LIMITED document-quality
