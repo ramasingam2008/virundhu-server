@@ -42,7 +42,6 @@ app.post("/verify", async (req, res) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `
 You are helping a catering-staff marketplace perform a LIMITED document-quality
@@ -73,18 +72,37 @@ Return ONLY valid JSON in this exact shape:
 }
 `;
 
-    const response = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType,
-          data: imageBase64
-        }
-      }
-    ]);
+    // Try primary model, fallback to alternative models if high demand (503 error) occurs
+    const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash"];
+    let responseText = "";
 
-    let text = response.response.text() || "";
-    text = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+    for (const modelName of modelsToTry) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const response = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              mimeType,
+              data: imageBase64
+            }
+          }
+        ]);
+        responseText = response.response.text() || "";
+        if (responseText) break; // Successfully got response
+      } catch (err) {
+        console.warn(`Model ${modelName} failed, trying next fallback...`, err.message);
+      }
+    }
+
+    if (!responseText) {
+      return res.status(503).json({
+        ok: false,
+        error: "AI service busy. Please try again in a few seconds."
+      });
+    }
+
+    let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
     let result;
     try {
