@@ -46,12 +46,9 @@ app.post("/verify", async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     
-    // Configure gemini-1.5-flash with structured JSON output
+    // Modern supported Gemini model endpoint
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      generationConfig: {
-        responseMimeType: "application/json"
-      }
+      model: "gemini-3.6-flash"
     });
 
     const prompt = `
@@ -81,7 +78,7 @@ Respond ONLY with JSON matching this exact structure:
     let attempts = 0;
     const maxAttempts = 3;
 
-    // Retry mechanism with exponential delay for 503 high-demand errors
+    // Retry loop to handle 503 high demand spikes automatically
     while (attempts < maxAttempts) {
       try {
         const response = await model.generateContent([
@@ -104,9 +101,11 @@ Respond ONLY with JSON matching this exact structure:
       }
     }
 
+    let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+
     let result;
     try {
-      result = JSON.parse(responseText.trim());
+      result = JSON.parse(text);
     } catch {
       return res.status(502).json({
         ok: false,
