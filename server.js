@@ -45,62 +45,37 @@ app.post("/verify", async (req, res) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    
-    // Modern supported Gemini model endpoint
-    const model = genAI.getGenerativeModel({
-      model: "gemini-3.6-flash"
-    });
+    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
 
     const prompt = `
-You are an ID and Person verification classifier.
+You are a strict binary classifier. Look at the image and check ONLY:
+1. Does it contain a human photo, face, person, or a valid ID document/proof?
+2. Does it contain anything else (like flowers, animals, vehicles, trees, fruits, electronics, home appliances, buildings, scenery, objects)?
 
-PERMITTED CATEGORIES (Set status to "verified"):
-1. Personal ID Documents: Aadhaar, PAN card, Passport, Driving License, Voter ID, or any government ID document.
-2. Human Photos: Clear face, portrait, selfie, or person photo.
+IMPORTANT INSTRUCTIONS:
+- IGNORE image quality, blur, brightness, or cropping completely. Do not reject photos just because they are blurry, dark, or cropped.
+- If it contains a human photo, face, or an ID document, set status to "verified".
+- If it contains flowers, animals, vehicles, trees, fruits, or any other non-human objects, set status to "flagged".
 
-FORBIDDEN CATEGORIES (Set status to "flagged"):
-- Objects, flowers, plants, trees, animals, pets, vehicles, cars, bikes, electronics, home appliances, buildings, scenery, blank screens, or any non-human objects.
-
-RULES:
-- If the image contains ANY forbidden non-human object (e.g. flower, animal, car, appliance), set status to "flagged".
-- ONLY set status to "verified" if the image clearly contains an ID document or a human face/portrait.
-- Do NOT extract or output sensitive personal data like ID numbers or addresses.
-
-Respond ONLY with JSON matching this exact structure:
+Return ONLY valid JSON in this exact structure:
 {
   "status": "verified" or "flagged",
-  "documentType": "string describing type (e.g. ID Document, Human Photo, Flower, Vehicle)",
-  "note": "short reason"
+  "documentType": "Human Photo / ID Document / Other Object",
+  "note": "Checked"
 }
 `;
 
-    let responseText = "";
-    let attempts = 0;
-    const maxAttempts = 3;
-
-    // Retry loop to handle 503 high demand spikes automatically
-    while (attempts < maxAttempts) {
-      try {
-        const response = await model.generateContent([
-          prompt,
-          {
-            inlineData: {
-              mimeType,
-              data: imageBase64
-            }
-          }
-        ]);
-        responseText = response.response.text() || "";
-        if (responseText) break;
-      } catch (err) {
-        attempts++;
-        console.warn(`Gemini API Attempt ${attempts} failed: ${err.message}`);
-        if (attempts >= maxAttempts) throw err;
-        // Wait 1.5 seconds before retrying
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+    const response = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType,
+          data: imageBase64
+        }
       }
-    }
+    ]);
 
+    const responseText = response.response.text() || "";
     let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
     let result;
@@ -110,17 +85,17 @@ Respond ONLY with JSON matching this exact structure:
       return res.status(502).json({
         ok: false,
         status: "flagged",
-        error: "Could not evaluate image. Please try again."
+        error: "Could not evaluate image."
       });
     }
 
-    const isVerified = result.status === "verified";
+    const status = result.status === "verified" ? "verified" : "flagged";
 
     return res.json({
       ok: true,
-      status: isVerified ? "verified" : "flagged",
+      status,
       documentType: String(result.documentType || "Unknown"),
-      note: String(result.note || "Validation complete.")
+      note: String(result.note || "Checked.")
     });
 
   } catch (error) {
@@ -128,7 +103,7 @@ Respond ONLY with JSON matching this exact structure:
     return res.status(500).json({
       ok: false,
       status: "flagged",
-      error: "Verification failed due to high AI load. Please try again in a moment."
+      error: "Verification failed. Please try again."
     });
   }
 });
