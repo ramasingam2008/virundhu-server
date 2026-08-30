@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { GoogleGenAI } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -41,7 +41,8 @@ app.post("/verify", async (req, res) => {
       });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     const prompt = `
 You are helping a catering-staff marketplace perform a LIMITED document-quality
@@ -72,28 +73,17 @@ Return ONLY valid JSON in this exact shape:
 }
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType,
-                data: imageBase64
-              }
-            }
-          ]
+    const response = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType,
+          data: imageBase64
         }
-      ],
-      config: {
-        responseMimeType: "application/json"
       }
-    });
+    ]);
 
-    let text = response.text || "";
+    let text = response.response.text() || "";
     text = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 
     let result;
