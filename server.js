@@ -22,6 +22,7 @@ app.post("/verify", async (req, res) => {
     if (!imageBase64 || !mimeType) {
       return res.status(400).json({
         ok: false,
+        status: "flagged",
         error: "imageBase64 and mimeType are required."
       });
     }
@@ -29,6 +30,7 @@ app.post("/verify", async (req, res) => {
     if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
       return res.status(400).json({
         ok: false,
+        status: "flagged",
         error: "Only JPG, PNG and WebP images are supported."
       });
     }
@@ -37,72 +39,97 @@ app.post("/verify", async (req, res) => {
     if (!apiKey) {
       return res.status(500).json({
         ok: false,
+        status: "flagged",
         error: "GEMINI_API_KEY is not configured on the server."
       });
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-3.6-flash" });
+    
+    // Configure gemini-1.5-flash with structured JSON output
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        responseMimeType: "application/json"
+      }
+    });
 
     const prompt = `
-Analyze the uploaded image with STRICT compliance:
+You are an ID and Person verification classifier.
 
 PERMITTED CATEGORIES (Set status to "verified"):
-1. Personal ID Documents: Aadhaar, PAN card, Passport, Driving License, Voter ID, or any government photo ID.
-2. Human Photos: A clear person's face, portrait, selfie, or profile photo of a human being.
+1. Personal ID Documents: Aadhaar, PAN card, Passport, Driving License, Voter ID, or any government ID document.
+2. Human Photos: Clear face, portrait, selfie, or person photo.
 
 FORBIDDEN CATEGORIES (Set status to "flagged"):
-- Objects, flowers, plants, trees, animals, pets, vehicles, cars, bikes, electronics, home appliances, buildings, bridges, scenery, blank screens, or non-human items.
+- Objects, flowers, plants, trees, animals, pets, vehicles, cars, bikes, electronics, home appliances, buildings, scenery, blank screens, or any non-human objects.
 
 RULES:
-- If the image contains ANY forbidden object (e.g., flower, animal, car, appliance), set "status" to "flagged".
-- ONLY set "status" to "verified" if the image clearly shows an ID proof or a human photo.
-- Do NOT extract or return sensitive personal data like ID numbers or full addresses.
+- If the image contains ANY forbidden non-human object (e.g. flower, animal, car, appliance), set status to "flagged".
+- ONLY set status to "verified" if the image clearly contains an ID document or a human face/portrait.
+- Do NOT extract or output sensitive personal data like ID numbers or addresses.
 
-Return ONLY valid JSON in this exact structure:
+Respond ONLY with JSON matching this exact structure:
 {
   "status": "verified" or "flagged",
-  "documentType": "ID Proof / Human Photo / Rejected Object",
-  "note": "Short reason explaining acceptance or rejection"
+  "documentType": "string describing type (e.g. ID Document, Human Photo, Flower, Vehicle)",
+  "note": "short reason"
 }
 `;
 
-    const response = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          mimeType,
-          data: imageBase64
-        }
-      }
-    ]);
+    let responseText = "";
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    const responseText = response.response.text() || "";
-    let text = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+    // Retry mechanism with exponential delay for 503 high-demand errors
+    while (attempts < maxAttempts) {
+      try {
+        const response = await model.generateContent([
+          prompt,
+          {
+            inlineData: {
+              mimeType,
+              data: imageBase64
+            }
+          }
+        ]);
+        responseText = response.response.text() || "";
+        if (responseText) break;
+      } catch (err) {
+        attempts++;
+        console.warn(`Gemini API Attempt ${attempts} failed: ${err.message}`);
+        if (attempts >= maxAttempts) throw err;
+        // Wait 1.5 seconds before retrying
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
 
     let result;
     try {
-      result = JSON.parse(text);
+      result = JSON.parse(responseText.trim());
     } catch {
       return res.status(502).json({
         ok: false,
-        error: "AI produced an unreadable evaluation. Please re-upload."
+        status: "flagged",
+        error: "Could not evaluate image. Please try again."
       });
     }
 
-    const status = result.status === "verified" ? "verified" : "flagged";
+    const isVerified = result.status === "verified";
 
     return res.json({
       ok: true,
-      status,
+      status: isVerified ? "verified" : "flagged",
       documentType: String(result.documentType || "Unknown"),
-      note: String(result.note || "Image validation complete.")
+      note: String(result.note || "Validation complete.")
     });
+
   } catch (error) {
     console.error("Verification error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Verification failed. Please upload a clear photo of an ID or human."
+      status: "flagged",
+      error: "Verification failed due to high AI load. Please try again in a moment."
     });
   }
 });
