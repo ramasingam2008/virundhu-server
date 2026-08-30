@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { GoogleGenAI } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,58 +14,49 @@ app.get("/", (req, res) => {
 
 app.post("/verify", async (req, res) => {
   try {
-    const { imageBase64 } = req.body || {};
+    const { imageBase64, mimeType } = req.body || {};
 
     if (!imageBase64) {
-      return res.status(400).json({ ok: false, status: "flagged", error: "No image payload provided." });
+      return res.status(400).json({ ok: false, status: "flagged", error: "Image required." });
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ ok: false, status: "flagged", error: "Missing API Key configuration." });
+      return res.status(500).json({ ok: false, status: "flagged", error: "Missing API Key." });
     }
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Active production endpoint
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `Check if this image is a human photo/face OR an ID document.
-- If YES (human photo or ID card/document), output {"status": "verified"}
-- If NO (flowers, animals, vehicles, trees, fruits, electronics, objects), output {"status": "flagged"}
-
-Ignore image quality, blur, brightness, or cropping.
-Return ONLY raw JSON in this exact shape: {"status": "verified" or "flagged"}`
-            },
-            {
-              inlineData: {
-                mimeType: "image/jpeg",
-                data: imageBase64
-              }
-            }
-          ]
-        }
-      ],
-      config: {
-        responseMimeType: "application/json"
+    const genAI = new GoogleGenerativeAI(apiKey);
+    
+    // Fast model with speed constraints
+    const model = genAI.getGenerativeModel({
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 50, // Ultra-fast response cutoff
+        temperature: 0.0
       }
     });
 
-    const responseText = response.text || "";
-    const cleanJson = responseText.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
-    
-    let result;
-    try {
-      result = JSON.parse(cleanJson);
-    } catch {
-      return res.status(502).json({ ok: false, status: "flagged", error: "Evaluation read error." });
-    }
+    const prompt = `
+Is this image a human photo, human face, or personal ID document?
+- "verified" if human face/photo OR ID document/proof.
+- "flagged" if flowers, animals, vehicles, trees, fruits, objects, or appliances.
 
+Ignore blur, quality, or cropping.
+Output exact JSON: {"status": "verified" or "flagged"}
+`;
+
+    const response = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          mimeType: mimeType || "image/jpeg",
+          data: imageBase64
+        }
+      }
+    ]);
+
+    const result = JSON.parse(response.response.text().trim());
     const isVerified = result.status === "verified";
 
     return res.json({
@@ -79,9 +70,9 @@ Return ONLY raw JSON in this exact shape: {"status": "verified" or "flagged"}`
     return res.status(500).json({
       ok: false,
       status: "flagged",
-      error: "Verification failed. Retry in a moment."
+      error: "Verification error. Please retry."
     });
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server on port ${PORT}`));
