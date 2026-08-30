@@ -43,7 +43,6 @@ app.post("/verify", async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(apiKey);
 
-    // Strict prompt to filter out non-human, non-ID images
     const prompt = `
 Analyze the uploaded image with STRICT compliance to these instructions:
 
@@ -67,10 +66,11 @@ Return ONLY valid JSON in this exact structure:
 }
 `;
 
+    // Valid production models array
     const modelsToTry = [
-      "gemini-1.5-flash",
-      "gemini-1.5-pro",
-      "gemini-2.0-flash",
+      "gemini-1.5-flash-latest",
+      "gemini-1.5-flash-8b",
+      "gemini-1.5-pro-latest",
       "gemini-2.5-flash"
     ];
 
@@ -82,7 +82,7 @@ Return ONLY valid JSON in this exact structure:
           model: modelName,
           generationConfig: { 
             maxOutputTokens: 150,
-            temperature: 0.1 // Low temperature ensures strict adherence to rules
+            temperature: 0.1
           } 
         });
 
@@ -99,14 +99,14 @@ Return ONLY valid JSON in this exact structure:
         responseText = response.response.text() || "";
         if (responseText) break;
       } catch (err) {
-        console.warn(`Model ${modelName} failed, trying next fallback...`, err.message);
+        console.warn(`Model ${modelName} failed:`, err.message);
       }
     }
 
     if (!responseText) {
       return res.status(503).json({
         ok: false,
-        error: "Verification service temporary busy. Please try again."
+        error: "AI verification busy. Please try again in a few seconds."
       });
     }
 
@@ -118,7 +118,7 @@ Return ONLY valid JSON in this exact structure:
     } catch {
       return res.status(502).json({
         ok: false,
-        error: "AI produced an unreadable evaluation. Please re-upload."
+        error: "Unreadable AI output. Please re-upload image."
       });
     }
 
@@ -128,13 +128,13 @@ Return ONLY valid JSON in this exact structure:
       ok: true,
       status,
       documentType: String(result.documentType || "Unknown"),
-      note: String(result.note || "Image validation complete.")
+      note: String(result.note || "Validation complete.")
     });
   } catch (error) {
     console.error("Verification error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Verification failed. Please upload a clear photo of an ID or human."
+      error: "Verification request failed. Please try again."
     });
   }
 });
