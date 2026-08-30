@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 app.get("/", (req, res) => {
-  res.json({ ok: true, message: "Virundhu ultra-fast Cloudflare backend running." });
+  res.json({ ok: true, message: "Virundhu fast AI backend running." });
 });
 
 app.post("/verify", async (req, res) => {
@@ -16,74 +16,51 @@ app.post("/verify", async (req, res) => {
     const { imageBase64 } = req.body || {};
 
     if (!imageBase64) {
-      return res.status(400).json({ ok: false, status: "flagged", error: "Image base64 required." });
+      return res.status(400).json({ ok: false, status: "flagged", error: "Image required." });
     }
 
-    // Convert Base64 string to raw binary byte buffer
     const imageBuffer = Buffer.from(imageBase64, "base64");
 
-    // Cloudflare Account ID and API Token
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID || "YOUR_CLOUDFLARE_ACCOUNT_ID";
-    const apiToken = process.env.CLOUDFLARE_API_TOKEN || "cf081adaee8e1d76bac483629efe000b";
+    // Hugging Face Vision API (Free & Fast - No Account ID needed)
+    const hfResponse = await fetch(
+      "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: imageBuffer
+      }
+    );
 
-    // Sub-200ms ResNet-50 Vision Classification Endpoint
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/microsoft/resnet-50`;
-
-    const cfResponse = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiToken}`,
-        "Content-Type": "application/octet-stream"
-      },
-      body: imageBuffer
-    });
-
-    if (!cfResponse.ok) {
-      console.error("Cloudflare API error status:", cfResponse.status);
-      return res.status(500).json({ ok: false, status: "flagged", error: "Cloudflare classification failed." });
+    if (!hfResponse.ok) {
+      console.error("HF Status:", hfResponse.status);
+      return res.status(500).json({ ok: false, status: "flagged", error: "Vision API busy." });
     }
 
-    const data = await cfResponse.json();
-    const results = data.result || [];
+    const data = await hfResponse.json();
+    const caption = (data[0]?.generated_text || "").toLowerCase();
 
-    // Allowed human and document-related tags from ResNet-50 vision model
-    const allowedCategories = [
-      "person", "human", "face", "identity", "passport", "card",
-      "document", "paper", "man", "woman", "boy", "girl", "portrait"
+    // Allowed human & document concepts
+    const allowedKeywords = [
+      "person", "man", "woman", "human", "face", "boy", "girl",
+      "selfie", "portrait", "card", "document", "passport", "paper", "id"
     ];
 
-    // Forbidden non-human subjects
-    const forbiddenCategories = [
+    // Forbidden objects
+    const forbiddenKeywords = [
       "flower", "rose", "plant", "tree", "animal", "dog", "cat",
       "car", "vehicle", "truck", "appliance", "building", "fruit", "food"
     ];
 
-    let isVerified = false;
-    let detectedLabel = "Unknown";
+    const hasForbidden = forbiddenKeywords.some(word => caption.includes(word));
+    const hasAllowed = allowedKeywords.some(word => caption.includes(word));
 
-    for (const item of results) {
-      const label = item.label.toLowerCase();
-      
-      // Stop if a forbidden object is detected with higher confidence
-      if (forbiddenCategories.some(f => label.includes(f))) {
-        detectedLabel = item.label;
-        isVerified = false;
-        break;
-      }
-
-      // Mark verified if a human or document concept is detected
-      if (allowedCategories.some(a => label.includes(a))) {
-        detectedLabel = item.label;
-        isVerified = true;
-        break;
-      }
-    }
+    const isVerified = hasAllowed && !hasForbidden;
 
     return res.json({
       ok: true,
       status: isVerified ? "verified" : "flagged",
-      documentType: detectedLabel,
-      note: isVerified ? "Human photo or ID recognized." : "Rejected non-human/non-ID photo."
+      documentType: caption || "Image evaluated",
+      note: isVerified ? "Human or ID recognized." : "Rejected non-human/non-ID subject."
     });
 
   } catch (error) {
